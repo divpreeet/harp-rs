@@ -1,5 +1,6 @@
 use hifi_core::api::Api;
 use std::io::{self, Write};
+use tokio::process::Command;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,12 +37,21 @@ async fn main() -> anyhow::Result<()> {
     io::stdin().read_line(&mut idx)?;
     let idx: usize = idx.trim().parse().unwrap_or(0);
 
-    if let Some(track) = tracks.get(idx) {
-        let url = api.get_url(track.id).await?;
-        println!("playback url: {}", url);
-    } else {
+    let Some(track) = tracks.get(idx) else {
         println!("invalid index");
-    }
+        return Ok(());
+    };
 
-    Ok(())
+    println!("playback url");
+    let url = api.get_url(track.id).await?;
+    println!("playing: {}", track.title);
+    println!("url: {}", url);
+
+    let status = Command::new("mpv").arg("--no-video").arg(&url).status().await;
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => { eprintln!("mpv exited: {}", s); Ok(()) }
+        Err(e) => { eprintln!("failed to launch mpv: {}", e); Ok(()) }
+    }
 }

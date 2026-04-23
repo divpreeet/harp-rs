@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
 hifi-core = { path = "../hifi-core" }
-serde = "1.0.228"
-anyhow = "1.0.102"
+anyhow = "1"
+ratatui = "0.30.0"
+crossterm = "0.29.0"
+
