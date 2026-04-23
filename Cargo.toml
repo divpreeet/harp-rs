@@ -1,0 +1,3 @@
+[workspace]
+members = ["hifi-core", "hifi-cli"]
+resolver = "2"

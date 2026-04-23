@@ -1,0 +1,36 @@
+   0.057649542s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint: stale: changed "/Users/divpreet/Developer/harp-rs/hifi-core/src/api.rs"
+   0.057662542s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint:           (vs) "/Users/divpreet/Developer/harp-rs/target/debug/.fingerprint/hifi-core-02501ba8297c4cf4/dep-lib-hifi_core"
+   0.057665334s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1776932173, nanos: 108778685 } < FileTime { seconds: 1776932601, nanos: 185458221 }
+   0.057787042s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint: fingerprint dirty for hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli)/Check { test: false }/TargetInner { name: "hifi-cli", doc: true, ..: with_path("/Users/divpreet/Developer/harp-rs/hifi-cli/src/main.rs", Edition2024) }
+   0.057796625s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(28) })
+   0.058264750s  INFO prepare_target{force=false package_id=hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core) target="hifi_core"}: cargo::core::compiler::fingerprint: fingerprint dirty for hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("hifi_core", ["lib"], "/Users/divpreet/Developer/harp-rs/hifi-core/src/lib.rs", Edition2024) }
+   0.058271209s  INFO prepare_target{force=false package_id=hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core) target="hifi_core"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/divpreet/Developer/harp-rs/target/debug/.fingerprint/hifi-core-02501ba8297c4cf4/dep-lib-hifi_core", reference_mtime: FileTime { seconds: 1776932173, nanos: 108778685 }, stale: "/Users/divpreet/Developer/harp-rs/hifi-core/src/api.rs", stale_mtime: FileTime { seconds: 1776932601, nanos: 185458221 } }))
+   0.065876334s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint: fingerprint dirty for hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli)/Check { test: true }/TargetInner { name: "hifi-cli", doc: true, ..: with_path("/Users/divpreet/Developer/harp-rs/hifi-cli/src/main.rs", Edition2024) }
+   0.065887250s  INFO prepare_target{force=false package_id=hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli) target="hifi-cli"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(28) })
+   0.066238125s  INFO prepare_target{force=false package_id=hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core) target="hifi_core"}: cargo::core::compiler::fingerprint: fingerprint error for hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("hifi_core", ["lib"], "/Users/divpreet/Developer/harp-rs/hifi-core/src/lib.rs", Edition2024) }
+   0.066244417s  INFO prepare_target{force=false package_id=hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core) target="hifi_core"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/divpreet/Developer/harp-rs/target/debug/.fingerprint/hifi-core-747270e3a36e84a8/test-lib-hifi_core`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+    Checking hifi-core v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-core)
+    Checking hifi-cli v0.1.0 (/Users/divpreet/Developer/harp-rs/hifi-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.26s
