@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::models::{SearchResponse, Track};
 
+#[derive(Clone)]
 pub struct Api {
     client: Client,
     search_base: &'static str,
@@ -81,7 +82,6 @@ impl Api {
             base
         );
         println!("track raw {}", body.chars().take(1000).collect::<String>());
-
         if !status.is_success() {
             return Ok(None);
         }
