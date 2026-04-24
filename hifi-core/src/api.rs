@@ -35,12 +35,12 @@ pub struct Api {
     pub ytdlp: String,
 }
 
-fn split_artist(s: &str) -> (&str, &str) {
-    if let Some(idx) = s.rfind(" - ") {
-        let (title, artist) = s.split_at(idx);
-        (title.trim(), artist[3..].trim())
+fn split_artist(s: &str) -> (String, String) {
+    if let Some(idx) = s.find(" - ") {
+        let (artist, title) = s.split_at(idx);
+        (artist.trim().to_string(), title[3..].trim().to_string())
     } else {
-        (s.trim(), "")
+        ("unknown artist".to_string(), s.trim().to_string())
     }
 }
 

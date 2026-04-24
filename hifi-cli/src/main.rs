@@ -29,11 +29,12 @@ async fn main() -> Result<()> {
 
     task::spawn(async move {
         while let Some(url) = player_rx.recv().await {
+            eprintln!("running mpv on {url}");
             let status = Command::new("mpv")
                 .arg("--no-video")
                 .arg(&url)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
+                //.stdout(std::process::Stdio::null())
+                //.stderr(std::process::Stdio::null())
                 .status()
                 .await;
 
@@ -131,8 +132,8 @@ impl App {
                         };
                         let display = format!(
                             "{} - {}",
-                            track.title,
-                            track.artist.as_deref().unwrap_or("Unknown Artist")
+                            track.artist.as_deref().unwrap_or("Unknown Artist"),
+                            track.title
                         );
                         ListItem::new(Span::styled(display, style))
                     })
