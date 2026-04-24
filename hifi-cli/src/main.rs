@@ -76,7 +76,7 @@ struct App {
     status: String,
     search_result_rx: Receiver<Vec<Track>>,
     search_result_tx: Sender<Vec<Track>>,
-    current: Arc<Mutex<Option<Child>>>
+    current: Arc<Mutex<Option<Child>>>,
 }
 
 impl App {
@@ -92,7 +92,7 @@ impl App {
             status: String::new(),
             search_result_rx,
             search_result_tx,
-            current
+            current,
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -192,11 +192,20 @@ impl App {
                                 let api = self.api.clone();
                                 let artist = track.artist.unwrap_or_else(|| "Unknown Artist".to_string());
                                 let title = track.title.clone();
+                                let artwork = track.artwork.clone();
+
                                 tokio::spawn(async move {
                                     if let Ok(url) = api.get_url(&artist, &title).await {
                                         let _ = player_tx.send(url).await;
                                     } else {
                                         eprintln!("coudl not query url");
+                                    }
+
+                                    if let Some(art_url) = artwork {
+                                        if let Ok(img_bytes) = api.artwork(&art_url).await {
+                                            let path = "/tmp/art.jpg";
+                                            let _ = std::fs::write(path, &img_bytes);
+                                        }
                                     }
                                 });
                             }

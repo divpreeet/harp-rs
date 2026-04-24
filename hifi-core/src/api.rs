@@ -1,44 +1,73 @@
-
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use reqwest::Client;
-use tokio::process::Command;
-use crate::models::Track;
 use serde::Deserialize;
+use tokio::process::Command;
 
-
-#[derive(Deserialize)]
-struct DiscogsRelease {
-    title: String,
-    #[serde(default)]
-    year: Option<String>,
-    #[serde(default)]
-    cover_image: Option<String>,
-    #[serde(default)]
-    thumb: Option<String>,
-    #[serde(default)]
-    id: Option<u32>,
-    #[serde(default)]
-    resource_url: Option<String>
-}
-
-#[derive(Deserialize)]
-struct DiscogsResults {
-    results: Vec<DiscogsRelease>
-}
+use crate::models::Track;
 
 #[derive(Clone)]
 pub struct Api {
     http: Client,
-    // yt dlpe path
     pub ytdlp: String,
 }
 
-fn split_artist(s: &str) -> (String, String) {
-    if let Some(idx) = s.find(" - ") {
-        let (artist, title) = s.split_at(idx);
-        (artist.trim().to_string(), title[3..].trim().to_string())
+#[derive(Debug, Deserialize)]
+struct DeezerSearchResponse {
+    data: Vec<DeezerTrack>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct DeezerTrack {
+    id: u64,
+    title: String,
+    artist: DeezerArtist,
+    album: DeezerAlbum,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct DeezerArtist {
+    name: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct DeezerAlbum {
+    title: String,
+    #[serde(default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    cover_xl: Option<String>,
+    #[serde(default)]
+    cover_big: Option<String>,
+    #[serde(default)]
+    cover_medium: Option<String>,
+    #[serde(default)]
+    cover: Option<String>,
+}
+
+fn non_empty(opt: Option<String>) -> Option<String> {
+    opt.and_then(|s| {
+        let s = s.trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    })
+}
+
+fn pick_artwork(album: &DeezerAlbum) -> Option<String> {
+    non_empty(album.cover_xl.clone())
+        .or_else(|| non_empty(album.cover_big.clone()))
+        .or_else(|| non_empty(album.cover_medium.clone()))
+        .or_else(|| non_empty(album.cover.clone()))
+}
+
+fn parse_year(release_date: &Option<String>) -> Option<u16> {
+    let date = release_date.as_deref()?.trim();
+    if date.len() >= 4 {
+        date[..4].parse::<u16>().ok()
     } else {
-        ("unknown artist".to_string(), s.trim().to_string())
+        None
     }
 }
 
@@ -46,7 +75,7 @@ impl Api {
     pub fn new() -> Self {
         Self {
             http: Client::new(),
-            ytdlp: "yt-dlp".to_string()
+            ytdlp: "yt-dlp".to_string(),
         }
     }
 
@@ -56,44 +85,69 @@ impl Api {
             return Ok(vec![]);
         }
 
-        let url = "https://api.discogs.com/database/search";
-        let params = [
-            ("q", q),
-            ("type", "release"),
-            ("per_page", "10") 
-        ];
+        let res = self
+            .http
+            .get("https://api.deezer.com/search")
+            .query(&[("q", q), ("limit", "10")])
+            .header("User-Agent", "hifi-cli/0.1 (+https://github.com/divpreeet)")
+            .send()
+            .await?
+            .error_for_status()?;
 
-        let res = self.http.get(url).query(&params).header("User-Agent", "harp-rs/0.1 +https://github.com/divpreeet").send().await?.error_for_status()?;
+        let data: DeezerSearchResponse = res.json().await?;
 
-        let data: DiscogsResults = res.json().await?;
-        let tracks = data.results.into_iter().map(|item| {
-            let (title, artist) = split_artist(&item.title);
-            Track {
-                id: item.resource_url.clone().unwrap_or_else(|| item.id.map_or_else(|| format!("{}-{}", title, artist), |i| i.to_string())),
-                title: title.to_string(),
-                artist: Some(artist.to_string()),
-                album: None,
-                year: item.year.as_ref().and_then(|s| s.parse::<u16>().ok()),
-                artwork: item.cover_image.or(item.thumb),
-            }
-        }).collect();
-        Ok(tracks)
+        Ok(data
+            .data
+            .into_iter()
+            .map(|item| {
+                let album = item.album.clone();
+
+                Track {
+                    id: item.id.to_string(),
+                    title: item.title,
+                    artist: Some(item.artist.name),
+                    album: Some(album.title.clone()),
+                    year: parse_year(&album.release_date),
+                    artwork: pick_artwork(&album),
+                }
+            })
+            .collect())
+    }
+
+    pub async fn artwork(&self, artwork_url: &str) -> Result<Vec<u8>> {
+        let url = artwork_url.trim();
+        if url.is_empty() {
+            bail!("empty artwork url");
+        }
+
+        let response = self.http.get(url).send().await?.error_for_status()?;
+        Ok(response.bytes().await?.to_vec())
     }
 
     pub async fn get_url(&self, artist: &str, title: &str) -> Result<String> {
-        let yt_q = format!("ytsearch1:{} - {} topic", artist, title);
-        let output = Command::new(&self.ytdlp).arg(&yt_q).arg("--print").arg("%(id)s").output().await?;
+        let yt_q = format!("ytsearch1:{} - {} topic", artist.trim(), title.trim());
+
+        let output = Command::new(&self.ytdlp)
+            .arg(&yt_q)
+            .arg("--print")
+            .arg("%(id)s")
+            .output()
+            .await?;
 
         if !output.status.success() {
             bail!(
-                "ytdlp failed to extract url {}",
+                "ytdlp failed to extract url: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+
         let out = String::from_utf8_lossy(&output.stdout);
         let video_id = out.lines().next().unwrap_or("").trim();
-        let watch_url = format!("https://www.youtube.com/watch?v={}", video_id);
-        Ok(watch_url)
+
+        if video_id.is_empty() {
+            bail!("yt-dlp returned an empty video id");
+        }
+
+        Ok(format!("https://www.youtube.com/watch?v={}", video_id))
     }
 }
-        
