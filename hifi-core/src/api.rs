@@ -1,23 +1,54 @@
-use anyhow::{Result, anyhow, bail};
-use base64::Engine;
-use reqwest::Client;
-use serde_json::Value;
+use std::fs::OpenOptions;
 
-use crate::models::{SearchResponse, Track};
+use anyhow::{Result, bail};
+use reqwest::Client;
+use serde_json::ser;
+use tokio::process::Command;
+use crate::models::Track;
+use serde::Deserialize;
+
+
+#[derive(Deserialize)]
+struct DiscogsRelease {
+    title: String,
+    #[serde(default)]
+    year: Option<String>,
+    #[serde(default)]
+    cover_image: Option<String>,
+    #[serde(default)]
+    thumb: Option<String>,
+    #[serde(default)]
+    id: Option<u32>,
+    #[serde(default)]
+    resource_url: Option<String>
+}
+
+#[derive(Deserialize)]
+struct DiscogsResults {
+    results: Vec<DiscogsRelease>
+}
 
 #[derive(Clone)]
 pub struct Api {
-    client: Client,
-    search_base: &'static str,
-    playback_bases: [&'static str; 4],
+    http: Client,
+    // yt dlpe path
+    pub ytdlp: String,
+}
+
+fn split_artist(s: &str) -> (&str, &str) {
+    if let Some(idx) = s.rfind(" - ") {
+        let (title, artist) = s.split_at(idx);
+        (title.trim(), artist[3..].trim())
+    } else {
+        (s.trim(), "")
+    }
 }
 
 impl Api {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
-            search_base: "https://api.monochrome.tf",
-            playback_bases: ["https://hund.qqdl.site", "https://frankfurt-2.monochrome.tf", "https://wolf.qqdl.site", "https://api.monochrome.tf"],
+            http: Client::new(),
+            ytdlp: "yt-dlp".to_string()
         }
     }
 
@@ -27,135 +58,46 @@ impl Api {
             return Ok(vec![]);
         }
 
-        let url = format!("{}/search/", self.search_base);
-        let response = self.client.get(url).query(&[("s", q)]).send().await?;
-        let status = response.status();
-        let body = response.text().await?;
+        let url = "https://api.discogs.com/database/search";
+        let params = [
+            ("q", q),
+            ("type", "release"),
+            ("per_page", "10") 
+        ];
 
-        if !status.is_success() {
-            bail!("http {}: {}", status.as_u16(), body);
-        }
+        let res = self.http.get(url).query(&params).header("User-Agent", "harp-rs/0.1 +https://github.com/divpreeet").send().await?.error_for_status()?;
 
-        let parsed: SearchResponse = serde_json::from_str(&body)?;
-        Ok(parsed.data.items)
+        let data: DiscogsResults = res.json().await?;
+        let tracks = data.results.into_iter().map(|item| {
+            let (title, artist) = split_artist(&item.title);
+            Track {
+                id: item.resource_url.clone().unwrap_or_else(|| item.id.map_or_else(|| format!("{}-{}", title, artist), |i| i.to_string())),
+                title: title.to_string(),
+                artist: Some(artist.to_string()),
+                album: None,
+                year: item.year.as_ref().and_then(|s| s.parse::<u16>().ok()),
+                artwork: item.cover_image.or(item.thumb),
+            }
+        }).collect();
+        Ok(tracks)
     }
 
-    pub async fn get_url(&self, id: i64) -> Result<String> {
-        let qualities = ["LOSSLESS", "HIGH", "LOW", "HI_RES_LOSSLESS"];
+    pub async fn get_url(&self, artist: &str, title: &str) -> Result<String> {
+        let yt_q = format!("ytsearch1:{} - {} topic", artist, title);
+        let output = Command::new(&self.ytdlp).arg(&yt_q).arg("-g").output().await?;
 
-        for base in self.playback_bases {
-            for quality in qualities {
-                if let Some(url) = self.try_playback(base, id, quality).await? {
-                    println!("playback resolved {}, quality={}", base, quality);
-                    return Ok(url);
-                }
-            }
+        if !output.status.success() {
+            bail!(
+                "ytdlp failed to extract url {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
-
-        Err(anyhow!("playback unavailable"))
-    }
-
-    async fn try_playback(
-        &self,
-        base: &str,
-        track_id: i64,
-        quality: &str,
-    ) -> Result<Option<String>> {
-        let url = format!("{}/track/", base);
-        let response = self
-            .client
-            .get(url)
-            .query(&[
-                ("id", track_id.to_string()),
-                ("quality", quality.to_string()),
-            ])
-            .send()
-            .await?;
-
-        let status = response.status();
-        let body = response.text().await?;
-
-        println!(
-            "track status={}, quality={}, host={}",
-            status.as_u16(),
-            quality,
-            base
-        );
-        println!("track raw {}", body.chars().take(1000).collect::<String>());
-        if !status.is_success() {
-            return Ok(None);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let url = out.trim();
+        if url.is_empty() {
+            bail!("failed to get playable url for video {yt_q}");
         }
-
-        let root: Value = match serde_json::from_str(&body) {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
-        };
-
-        let data_obj = match root.get("data") {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-
-        let direct_candidates = extract_urls(data_obj);
-        if let Some(best) = direct_candidates
-            .into_iter()
-            .find(|u| u.starts_with("http"))
-        {
-            return Ok(Some(best));
-        }
-
-        if let Some(manifest_b64) = data_obj.get("manifest").and_then(|v| v.as_str()) {
-            if let Ok(manifest_data) =
-                base64::engine::general_purpose::STANDARD.decode(manifest_b64)
-            {
-                if let Ok(manifest_json) = serde_json::from_slice::<Value>(&manifest_data) {
-                    if let Some(urls) = manifest_json.get("urls").and_then(|u| u.as_array()) {
-                        if let Some(first) = urls
-                            .iter()
-                            .filter_map(|x| x.as_str())
-                            .find(|u| u.starts_with("http"))
-                        {
-                            return Ok(Some(first.to_string()));
-                        }
-                    }
-
-                    let nested = extract_urls(&manifest_json);
-                    if let Some(any) = nested.into_iter().find(|u| u.starts_with("http")) {
-                        return Ok(Some(any));
-                    }
-                }
-            }
-        }
-
-        Ok(None)
+        Ok(url.to_string())
     }
 }
-
-fn extract_urls(v: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    extract_urls_inner(v, &mut out);
-    out.sort();
-    out.dedup();
-    out
-}
-
-fn extract_urls_inner(v: &Value, out: &mut Vec<String>) {
-    match v {
-        Value::String(s) => {
-            if s.starts_with("http://") || s.starts_with("https://") {
-                out.push(s.clone());
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr {
-                extract_urls_inner(item, out);
-            }
-        }
-        Value::Object(map) => {
-            for value in map.values() {
-                extract_urls_inner(value, out);
-            }
-        }
-        _ => {}
-    }
-}
+        

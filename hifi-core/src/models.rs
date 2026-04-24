@@ -11,11 +11,13 @@ pub struct SearchData {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Track {
-    pub id: i64,
+pub struct Track{
+    pub id: String,
     pub title: String,
-    pub artist: Option<Artist>,
-    pub album: Option<Album>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<u16>,
+    pub artwork: Option<String>
 }
 
 #[derive(Debug, Clone, Deserialize)]

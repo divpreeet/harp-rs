@@ -18,8 +18,8 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::{process::Command, sync::mpsc, task};
-
+use tokio::{process::Command, sync::{mpsc, mpsc::{Sender, Receiver}}, task};
+use hifi_core::models::Track;
 #[tokio::main]
 async fn main() -> Result<()> {
     let api = Api::new();
@@ -29,12 +29,16 @@ async fn main() -> Result<()> {
 
     task::spawn(async move {
         while let Some(url) = player_rx.recv().await {
-            println!("Playing track URL: {}", url);
-
-            let status = Command::new("mpv").arg("--no-video").arg(&url).status().await;
+            let status = Command::new("mpv")
+                .arg("--no-video")
+                .arg(&url)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
 
             if let Err(err) = status {
-                eprintln!("Failed to play audio {}", err);
+                eprintln!("failed to play {}", err);
             }
         }
     });
@@ -58,19 +62,28 @@ async fn main() -> Result<()> {
 struct App {
     api: Api,
     query: String,
-    results: Vec<(String, String)>,
+    results: Vec<Track>,
     selected: usize,
     player_tx: mpsc::Sender<String>,
+    search_active: bool,
+    status: String,
+    search_result_rx: Receiver<Vec<Track>>,
+    search_result_tx: Sender<Vec<Track>>,
 }
 
 impl App {
     fn new(api: Api, player_tx: mpsc::Sender<String>) -> Self {
+        let (search_result_tx, search_result_rx) = mpsc::channel(1);
         Self {
             api,
             query: String::new(),
             results: Vec::new(),
             selected: 0,
             player_tx,
+            search_active: false,
+            status: String::new(),
+            search_result_rx,
+            search_result_tx,
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -79,6 +92,12 @@ impl App {
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         loop {
+            if let Ok(new_results) = self.search_result_rx.try_recv() {
+                self.results = new_results;
+                self.selected = 0;
+                self.status = "ready".to_string();
+            }
+
             terminal.draw(|f| {
                 let layout = Layout::default()
                     .direction(Direction::Vertical)
@@ -88,29 +107,41 @@ impl App {
                             Constraint::Length(3),
                             Constraint::Min(5),
                             Constraint::Length(3),
+                            Constraint::Length(3),
                         ]
                         .as_ref(),
                     )
                     .split(f.area());
 
-                let search_bar = Paragraph::new(self.query.as_str()).block(Block::default().borders(Borders::ALL).title("search"));
-                f.render_widget(search_bar, layout[0]);
+                let mut input = self.query.clone();
+                if self.search_active {
+                    input.push('|')
+                }
+                let search_bar = Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("search"));
 
                 let items: Vec<ListItem> = self
                     .results
                     .iter()
                     .enumerate()
-                    .map(|(i, (title, _))| {
+                    .map(|(i, track)| {
                         let style = if i == self.selected {
                             Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
                         } else {
                             Style::default()
                         };
-
-                        ListItem::new(Span::styled(title, style))
+                        let display = format!(
+                            "{} - {}",
+                            track.title,
+                            track.artist.as_deref().unwrap_or("Unknown Artist")
+                        );
+                        ListItem::new(Span::styled(display, style))
                     })
                     .collect();
 
+                f.render_widget(search_bar, layout[0]);
+
+                let status_bar = Paragraph::new(format!("status: {}", self.status))
+                    .block(Block::default().borders(Borders::ALL));
                 let results_list = List::new(items)
                     .block(Block::default().borders(Borders::ALL).title("results"));
                 f.render_widget(results_list, layout[1]);
@@ -118,6 +149,7 @@ impl App {
                 let now_playing = Paragraph::new("arrow keys to navigage | enter - play | / - search | q - quit")
                     .block(Block::default().borders(Borders::ALL).title("controls"));
                 f.render_widget(now_playing, layout[2]);
+                f.render_widget(status_bar, layout[3]);
             })?;
 
             if event::poll(Duration::from_millis(100))? {
@@ -126,17 +158,29 @@ impl App {
                         KeyCode::Char('q') => break,
                         KeyCode::Char('/') => {
                             self.query.clear();
+                            self.search_active = true;
                         }
                         KeyCode::Enter => {
-                            if let Some((_title, track_id)) = self.results.get(self.selected).cloned() {
-                                let track_id = track_id.clone();
+                            if self.search_active {
+                                self.status = "searching".to_string();
+                                let query = self.query.trim().to_string();
+                                let api = self.api.clone();
+                                let search_result_tx = self.search_result_tx.clone();
+                                tokio::spawn(async move {
+                                    let tracks = api.search(&query).await.unwrap_or_default();
+                                    let _ = search_result_tx.send(tracks).await;
+                                });
+                                self.search_active = false;
+                            } else if let Some(track) = self.results.get(self.selected).cloned() {
                                 let player_tx = self.player_tx.clone();
                                 let api = self.api.clone();
+                                let artist = track.artist.unwrap_or_else(|| "Unknown Artist".to_string());
+                                let title = track.title.clone();
                                 tokio::spawn(async move {
-                                    if let Ok(url) = api.get_url(track_id.parse::<i64>().unwrap()).await {
+                                    if let Ok(url) = api.get_url(&artist, &title).await {
                                         let _ = player_tx.send(url).await;
                                     } else {
-                                        println!("could not query url")
+                                        eprintln!("coudl not query url");
                                     }
                                 });
                             }
@@ -159,8 +203,15 @@ impl App {
                         }
                         KeyCode::Esc => {
                             if !self.query.is_empty() {
-                                self.results = self.search().await?;
-                                self.selected = 0;
+                                self.status = "searching".to_string();
+                                let query = self.query.trim().to_string();
+                                let api = self.api.clone();
+                                let search_result_tx = self.search_result_tx.clone();
+                                tokio::spawn(async move {
+                                    let tracks = api.search(&query).await.unwrap_or_default();
+                                    let _ = search_result_tx.send(tracks).await;
+                                });
+                                self.search_active = false;
                             }
                         }
                         _ => {}
@@ -170,25 +221,5 @@ impl App {
         }
 
         Ok(())
-    }
-
-    async fn search(&self) -> Result<Vec<(String, String)>> {
-        let tracks = self.api.search(self.query.trim()).await?;
-        let results: Vec<(String, String)> = tracks
-            .into_iter()
-            .map(|track| {
-                let title = format!(
-                    "{} - {}",
-                    track.title,
-                    track
-                        .artist
-                        .and_then(|a| a.name.clone())
-                        .unwrap_or_else(|| "Unknown Artist".to_string())
-                );
-                (title, track.id.to_string())
-            })
-            .collect();
-
-        Ok(results)
     }
 }
