@@ -15,30 +15,37 @@ use ratatui::{
 };
 use std::{
     io::{self},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
+    process::Stdio
 };
-use tokio::{process::Command, sync::{mpsc, mpsc::{Sender, Receiver}}, task};
+use tokio::{process::{Command, Child}, sync::{Mutex, mpsc, mpsc::{Sender, Receiver}}, task};
 use hifi_core::models::Track;
 #[tokio::main]
+
+
 async fn main() -> Result<()> {
     let api = Api::new();
 
     let _sel_track: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let current: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let (player_tx, mut player_rx) = mpsc::channel::<String>(5);
 
+    let active = current.clone();
     task::spawn(async move {
         while let Some(url) = player_rx.recv().await {
-            let status = Command::new("mpv")
-                .arg("--no-video")
-                .arg(&url)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
+            {
+                let mut maybe_child = active.lock().await;
+                if let Some(child) = maybe_child.as_mut() {
+                    let _ = child.kill().await;
+                }
+            }
 
-            if let Err(err) = status {
-                eprintln!("failed to play {}", err);
+            let  child = Command::new("mpv").arg("--no-video").arg(&url).stderr(Stdio::null()).stdout(Stdio::null()).spawn().expect("failed to spawn");
+
+            {
+                let mut maybe_child = active.lock().await;
+                *maybe_child = Some(child);
             }
         }
     });
@@ -49,7 +56,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let app = App::new(api, player_tx);
+    let app = App::new(api, player_tx, current.clone());
     let res = app.run(&mut terminal).await;
 
     disable_raw_mode()?;
@@ -69,10 +76,11 @@ struct App {
     status: String,
     search_result_rx: Receiver<Vec<Track>>,
     search_result_tx: Sender<Vec<Track>>,
+    current: Arc<Mutex<Option<Child>>>
 }
 
 impl App {
-    fn new(api: Api, player_tx: mpsc::Sender<String>) -> Self {
+    fn new(api: Api, player_tx: mpsc::Sender<String>, current: Arc<Mutex<Option<Child>>>) -> Self {
         let (search_result_tx, search_result_rx) = mpsc::channel(1);
         Self {
             api,
@@ -84,6 +92,7 @@ impl App {
             status: String::new(),
             search_result_rx,
             search_result_tx,
+            current
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -155,7 +164,13 @@ impl App {
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(KeyEvent { code, .. }) = event::read()? {
                     match code {
-                        KeyCode::Char('q') => break,
+                        KeyCode::Char('q')  => {
+                            let mut guard = self.current.lock().await;
+                            if let Some(child) = guard.as_mut() {
+                                let _ = child.kill().await;
+                            }
+                            break;
+                        }
                         KeyCode::Char('/') => {
                             self.query.clear();
                             self.search_active = true;
@@ -172,6 +187,7 @@ impl App {
                                 });
                                 self.search_active = false;
                             } else if let Some(track) = self.results.get(self.selected).cloned() {
+                                self.status = "playing".to_string();
                                 let player_tx = self.player_tx.clone();
                                 let api = self.api.clone();
                                 let artist = track.artist.unwrap_or_else(|| "Unknown Artist".to_string());

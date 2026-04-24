@@ -1,8 +1,6 @@
-use std::fs::OpenOptions;
 
 use anyhow::{Result, bail};
 use reqwest::Client;
-use serde_json::ser;
 use tokio::process::Command;
 use crate::models::Track;
 use serde::Deserialize;
