@@ -84,7 +84,7 @@ impl Api {
 
     pub async fn get_url(&self, artist: &str, title: &str) -> Result<String> {
         let yt_q = format!("ytsearch1:{} - {} topic", artist, title);
-        let output = Command::new(&self.ytdlp).arg(&yt_q).arg("-g").output().await?;
+        let output = Command::new(&self.ytdlp).arg(&yt_q).arg("--print").arg("%(id)s").output().await?;
 
         if !output.status.success() {
             bail!(
@@ -93,11 +93,9 @@ impl Api {
             );
         }
         let out = String::from_utf8_lossy(&output.stdout);
-        let url = out.trim();
-        if url.is_empty() {
-            bail!("failed to get playable url for video {yt_q}");
-        }
-        Ok(url.to_string())
+        let video_id = out.lines().next().unwrap_or("").trim();
+        let watch_url = format!("https://www.youtube.com/watch?v={}", video_id);
+        Ok(watch_url)
     }
 }
         
