@@ -6,10 +6,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    Terminal, backend::{Backend, CrosstermBackend}, layout::{self, Constraint, Direction, Layout}, style::{Modifier, Style}, text::Span, widgets::{Block, Borders, List, ListItem, Paragraph}
+    Terminal, backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout}, style::{Modifier, Style}, text::Span, widgets::{Block, Borders, List, ListItem, Paragraph}
 };
 use std::{
-    io::{self}, path::Path, process::Stdio, sync::Arc, time::Duration
+    io::{self}, path::Path, process::Stdio, sync::Arc, time::{Duration, Instant}
 };
 use tokio::{process::{Command, Child}, sync::{Mutex, mpsc, mpsc::{Sender, Receiver}}, task};
 use hifi_core::models::Track;
@@ -76,13 +76,18 @@ struct App {
     search_result_tx: Sender<Vec<Track>>,
     current: Arc<Mutex<Option<Child>>>,
     view_mode: ViewMode,
-    now_playing: Option<Track>
+    now_playing: Option<Track>,
+    started_at: Option<Instant>,
+    track_duration: Option<f32>,
+    duration_rx: Receiver<f32>,
+    duration_tx: Sender<f32>
 }
 
 
 impl App {
     fn new(api: Api, player_tx: mpsc::Sender<String>, current: Arc<Mutex<Option<Child>>>) -> Self {
         let (search_result_tx, search_result_rx) = mpsc::channel(1);
+        let (duration_tx, duration_rx)= mpsc::channel(1);
         Self {
             api,
             query: String::new(),
@@ -96,6 +101,10 @@ impl App {
             current,
             view_mode: ViewMode::Search,
             now_playing: None,
+            started_at: None,
+            track_duration: None,
+            duration_rx,
+            duration_tx
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -104,6 +113,11 @@ impl App {
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         loop {
+            if let Ok(duration) = self.duration_rx.try_recv() {
+                self.track_duration = Some(duration);
+                self.started_at = Some(Instant::now());
+            } 
+
             if let Ok(new_results) = self.search_result_rx.try_recv() {
                 self.results = new_results;
                 self.selected = 0;
@@ -183,15 +197,19 @@ impl App {
                                 self.search_active = false;
                             } else if let Some(track) = self.results.get(self.selected).cloned() {
                                 self.status = "playing".to_string();
+                                self.now_playing = Some(track.clone());
                                 let player_tx = self.player_tx.clone();
                                 let api = self.api.clone();
                                 let artist = track.artist.unwrap_or_else(|| "Unknown Artist".to_string());
                                 let title = track.title.clone();
                                 let artwork = track.artwork.clone();
+                                let duration_tx = self.duration_tx.clone();
 
                                 tokio::spawn(async move {
-                                    if let Ok(url) = api.get_url(&artist, &title).await {
+                                    if let Ok((url, duration)) = api.get_url(&artist, &title).await {
                                         let _ = player_tx.send(url).await;
+                                        let _  = duration_tx.send(duration).await;
+
                                     } else {
                                         eprintln!("coudl not query url");
                                     }

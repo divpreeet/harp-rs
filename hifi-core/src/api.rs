@@ -124,13 +124,13 @@ impl Api {
         Ok(response.bytes().await?.to_vec())
     }
 
-    pub async fn get_url(&self, artist: &str, title: &str) -> Result<String> {
+    pub async fn get_url(&self, artist: &str, title: &str) -> Result<(String, f32)> {
         let yt_q = format!("ytsearch1:{} - {} topic", artist.trim(), title.trim());
 
         let output = Command::new(&self.ytdlp)
             .arg(&yt_q)
             .arg("--print")
-            .arg("%(id)s")
+            .arg("%(id)s|%(duration)s")
             .output()
             .await?;
 
@@ -142,12 +142,16 @@ impl Api {
         }
 
         let out = String::from_utf8_lossy(&output.stdout);
-        let video_id = out.lines().next().unwrap_or("").trim();
+        let line = out.lines().next().unwrap_or("").trim();
+        let mut parts = line.split('|');
 
+        let video_id = parts.next().unwrap_or("").trim();
+
+        let duration = parts.next().and_then(|d| d.parse::<f32>().ok()).unwrap_or(0.0);
         if video_id.is_empty() {
             bail!("yt-dlp returned an empty video id");
         }
 
-        Ok(format!("https://www.youtube.com/watch?v={}", video_id))
+        Ok((format!("https://www.youtube.com/watch?v={}", video_id), duration))
     }
 }
