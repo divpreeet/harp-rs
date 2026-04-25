@@ -6,18 +6,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Terminal,
+    Terminal, backend::{Backend, CrosstermBackend}, layout::{self, Constraint, Direction, Layout}, style::{Modifier, Style}, text::Span, widgets::{Block, Borders, List, ListItem, Paragraph}
 };
 use std::{
-    io::{self},
-    sync::Arc,
-    time::Duration,
-    process::Stdio
+    io::{self}, path::Path, process::Stdio, sync::Arc, time::Duration
 };
 use tokio::{process::{Command, Child}, sync::{Mutex, mpsc, mpsc::{Sender, Receiver}}, task};
 use hifi_core::models::Track;
@@ -66,6 +58,12 @@ async fn main() -> Result<()> {
     res
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ViewMode{
+    Search,
+    Player,
+}
+
 struct App {
     api: Api,
     query: String,
@@ -77,7 +75,10 @@ struct App {
     search_result_rx: Receiver<Vec<Track>>,
     search_result_tx: Sender<Vec<Track>>,
     current: Arc<Mutex<Option<Child>>>,
+    view_mode: ViewMode,
+    now_playing: Option<Track>
 }
+
 
 impl App {
     fn new(api: Api, player_tx: mpsc::Sender<String>, current: Arc<Mutex<Option<Child>>>) -> Self {
@@ -93,6 +94,8 @@ impl App {
             search_result_rx,
             search_result_tx,
             current,
+            view_mode: ViewMode::Search,
+            now_playing: None,
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -108,57 +111,49 @@ impl App {
             }
 
             terminal.draw(|f| {
-                let layout = Layout::default()
-                    .direction(Direction::Vertical)
-                    .margin(1)
-                    .constraints(
-                        [
-                            Constraint::Length(3),
-                            Constraint::Min(5),
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                        ]
-                        .as_ref(),
-                    )
-                    .split(f.area());
+                let layout = Layout::default().direction(Direction::Vertical).margin(1).constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(5),
+                    Constraint::Length(3)
+                ]).split(f.area());
+
+                let main_split = Layout::default().direction(Direction::Horizontal).constraints([
+                        Constraint::Length(35),
+                        Constraint::Min(10),
+                    ]).split(layout[1]);
 
                 let mut input = self.query.clone();
                 if self.search_active {
                     input.push('|')
                 }
-                let search_bar = Paragraph::new(input).block(Block::default().borders(Borders::ALL).title("search"));
+                
+                let search = Paragraph::new(self.query.clone()).block(Block::default().borders(Borders::ALL).title("search"));
+                f.render_widget(search, layout[0]);
 
-                let items: Vec<ListItem> = self
-                    .results
-                    .iter()
-                    .enumerate()
-                    .map(|(i, track)| {
-                        let style = if i == self.selected {
-                            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                        } else {
-                            Style::default()
-                        };
-                        let display = format!(
-                            "{} - {}",
-                            track.artist.as_deref().unwrap_or("Unknown Artist"),
-                            track.title
-                        );
-                        ListItem::new(Span::styled(display, style))
-                    })
-                    .collect();
+                let left = Paragraph::new("now playing panel").block(Block::default().borders(Borders::ALL).title("player"));
+                f.render_widget(left, main_split[0]);
 
-                f.render_widget(search_bar, layout[0]);
+                let items: Vec<ListItem> = self.results.iter().enumerate().map(|(i, track)| {
+                    let style = if i == self.selected {
+                        Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                    } else {
+                        Style::default()
+                    };
+                    
+                    let display = format!("{} - {}", track.artist.as_deref().unwrap_or("unknown artist"), track.title);
+                    
+                    ListItem::new(Span::styled(display, style))
+                }).collect();
+                
 
-                let status_bar = Paragraph::new(format!("status: {}", self.status))
-                    .block(Block::default().borders(Borders::ALL));
-                let results_list = List::new(items)
-                    .block(Block::default().borders(Borders::ALL).title("results"));
-                f.render_widget(results_list, layout[1]);
+                let right = List::new(items).block(Block::default().borders(Borders::ALL).title("results"));
+                f.render_widget(right, main_split[1]);
 
-                let now_playing = Paragraph::new("arrow keys to navigage | enter - play | / - search | q - quit")
-                    .block(Block::default().borders(Borders::ALL).title("controls"));
-                f.render_widget(now_playing, layout[2]);
-                f.render_widget(status_bar, layout[3]);
+                let footer = Paragraph::new("controls").block(Block::default().borders(Borders::ALL));
+                f.render_widget(footer, layout[2]);
+
+
+
             })?;
 
             if event::poll(Duration::from_millis(100))? {
