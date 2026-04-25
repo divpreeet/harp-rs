@@ -9,9 +9,9 @@ use ratatui::{
     Terminal, backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout}, style::{Modifier, Style}, text::Span, widgets::{Block, Borders, List, ListItem, Paragraph}
 };
 use std::{
-    io::{self}, path::Path, process::Stdio, sync::Arc, time::{Duration, Instant}
+    io::{self}, process::Stdio, sync::Arc, time::{Duration, Instant}
 };
-use tokio::{process::{Command, Child}, sync::{Mutex, mpsc, mpsc::{Sender, Receiver}}, task};
+use tokio::{process::{Child, Command}, sync::{Mutex, mpsc::{self, Receiver, Sender}}, task};
 use hifi_core::models::Track;
 #[tokio::main]
 
@@ -83,6 +83,10 @@ struct App {
     duration_tx: Sender<f32>
 }
 
+fn format_t(secs: f32) -> String {
+    let secs = secs as u64;
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
 
 impl App {
     fn new(api: Api, player_tx: mpsc::Sender<String>, current: Arc<Mutex<Option<Child>>>) -> Self {
@@ -105,6 +109,16 @@ impl App {
             track_duration: None,
             duration_rx,
             duration_tx
+        }
+    }
+
+    fn progress(&self) -> (f32, f32, f32) {
+        if let (Some(start), Some(duration)) = (self.started_at, self.track_duration) {
+            let elapsed = start.elapsed().as_secs_f32();
+            let progress = (elapsed / duration).min(1.0);
+            (elapsed, duration, progress)
+        } else {
+            (0.0, 0.0, 0.0)
         }
     }
     async fn run<B>(mut self, terminal: &mut Terminal<B>) -> Result<()>
@@ -144,7 +158,24 @@ impl App {
                 let search = Paragraph::new(self.query.clone()).block(Block::default().borders(Borders::ALL).title("search"));
                 f.render_widget(search, layout[0]);
 
-                let left = Paragraph::new("now playing panel").block(Block::default().borders(Borders::ALL).title("player"));
+                // left panel                
+                let (elapsed, total, progress) = self.progress();
+                
+                let title = self.now_playing.as_ref().map(|t| t.title.clone()).unwrap_or_else(|| "nothing playing".to_string());
+
+                let artist = self.now_playing.as_ref().and_then(|t| t.artist.clone()).unwrap_or_else(|| "-".to_string());
+                
+                // rpogress bar
+                let width = 24;
+                let filled = (progress * width as f32) as usize;
+
+                let bar: String = (0..width).map(|i| if i < filled { '█' } else { '─' }).collect();
+
+                let time = format!("{} / {}", format_t(elapsed), format_t(total));
+
+                let left_text = format!("\n{}\n{}\n\n[{}]\n{}\n", title, artist, bar, time);
+
+                let left = Paragraph::new(left_text).block(Block::default().borders(Borders::ALL).title("player"));
                 f.render_widget(left, main_split[0]);
 
                 let items: Vec<ListItem> = self.results.iter().enumerate().map(|(i, track)| {
