@@ -6,15 +6,15 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    Terminal, backend::{Backend, CrosstermBackend}, layout::{Constraint, Direction, Layout}, style::{Modifier, Style}, text::Span, widgets::{Block, Borders, List, ListItem, Paragraph}
+    Terminal, backend::{Backend, CrosstermBackend}, layout::{Alignment, Constraint, Direction, Layout}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, List, ListItem, Paragraph}
 };
 use std::{
     io::{self}, process::Stdio, sync::Arc, time::{Duration, Instant}
 };
 use tokio::{process::{Child, Command}, sync::{Mutex, mpsc::{self, Receiver, Sender}}, task};
 use hifi_core::models::Track;
+use image::imageops::{self, FilterType};
 #[tokio::main]
-
 
 async fn main() -> Result<()> {
     let api = Api::new();
@@ -64,6 +64,52 @@ enum ViewMode{
     Player,
 }
 
+struct NowPlaying {
+    duration: f32,
+    art: Option<Vec<Line<'static>>>,
+}
+
+fn format_t(secs: f32) -> String {
+    let secs = secs as u64;
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+
+fn img_unicode(path: &str, cells: u32) -> Option<Vec<Line<'static>>> {
+    let img = image::open(path).ok()?.to_rgb8();
+    let (w, h) = img.dimensions();
+
+    let side = w.min(h);
+    let x0 = (w - side) / 2;
+    let y0 = (h - side) / 2;
+
+    let cropped = imageops::crop_imm(&img, x0, y0, side, side).to_image();
+    let img = imageops::resize(&cropped, cells * 2, cells * 2, FilterType::Triangle);
+
+    let (w, h) = img.dimensions();
+    let mut lines = Vec::new();
+
+    for y in (0..h).step_by(2) {
+        let mut spans = Vec::new();
+
+        for x in 0..w {
+            let top = img.get_pixel(x, y);
+            let bottom = if y + 1 < h { img.get_pixel(x, y + 1) } else { top };
+
+            spans.push(Span::styled(
+                "▀",
+                Style::default()
+                    .fg(Color::Rgb(top[0], top[1], top[2]))
+                    .bg(Color::Rgb(bottom[0], bottom[1], bottom[2])),
+            ));
+        }
+
+        lines.push(Line::from(spans));
+    }
+
+    Some(lines)
+}
+
 struct App {
     api: Api,
     query: String,
@@ -79,19 +125,17 @@ struct App {
     now_playing: Option<Track>,
     started_at: Option<Instant>,
     track_duration: Option<f32>,
-    duration_rx: Receiver<f32>,
-    duration_tx: Sender<f32>
+    update_rx: Receiver<NowPlaying>,
+    update_tx: Sender<NowPlaying>,
+    art: Option<Vec<Line<'static>>>
 }
 
-fn format_t(secs: f32) -> String {
-    let secs = secs as u64;
-    format!("{:02}:{:02}", secs / 60, secs % 60)
-}
+
 
 impl App {
     fn new(api: Api, player_tx: mpsc::Sender<String>, current: Arc<Mutex<Option<Child>>>) -> Self {
         let (search_result_tx, search_result_rx) = mpsc::channel(1);
-        let (duration_tx, duration_rx)= mpsc::channel(1);
+        let (update_tx, update_rx)= mpsc::channel(1);
         Self {
             api,
             query: String::new(),
@@ -107,8 +151,9 @@ impl App {
             now_playing: None,
             started_at: None,
             track_duration: None,
-            duration_rx,
-            duration_tx
+            update_rx,
+            update_tx,
+            art: None
         }
     }
 
@@ -127,9 +172,10 @@ impl App {
         B::Error: std::error::Error + Send + Sync + 'static,
     {
         loop {
-            if let Ok(duration) = self.duration_rx.try_recv() {
-                self.track_duration = Some(duration);
+            if let Ok(update) = self.update_rx.try_recv() {
+                self.track_duration = Some(update.duration);
                 self.started_at = Some(Instant::now());
+                self.art = update.art
             } 
 
             if let Ok(new_results) = self.search_result_rx.try_recv() {
@@ -146,9 +192,15 @@ impl App {
                 ]).split(f.area());
 
                 let main_split = Layout::default().direction(Direction::Horizontal).constraints([
-                        Constraint::Length(35),
-                        Constraint::Min(10),
+                        Constraint::Length(45),
+                        Constraint::Min(10)
                     ]).split(layout[1]);
+
+                let left_split = Layout::default().direction(
+                    Direction::Vertical).constraints([
+                        Constraint::Length(22),
+                        Constraint::Min(6),
+                    ]).split(main_split[0]);
 
                 let mut input = self.query.clone();
                 if self.search_active {
@@ -173,10 +225,24 @@ impl App {
 
                 let time = format!("{} / {}", format_t(elapsed), format_t(total));
 
-                let left_text = format!("\n{}\n{}\n\n[{}]\n{}\n", title, artist, bar, time);
+                let art = self.art.clone().unwrap_or_else(|| vec![Line::from("loading artwotk")]);
+                
+                let art_w = Paragraph::new(art).alignment(Alignment::Center).block(Block::default().borders((Borders::ALL)));
 
-                let left = Paragraph::new(left_text).block(Block::default().borders(Borders::ALL).title("player"));
-                f.render_widget(left, main_split[0]);
+                f.render_widget(art_w, left_split[0]);
+
+                let info = vec![
+                    Line::from(title),
+                    Line::from(artist),
+                    Line::from(""),
+                    Line::from(format!("[{}]", bar)),
+                    Line::from(time),
+                ];
+
+                let info_widget = Paragraph::new(info)
+                    .block(Block::default().borders(Borders::ALL).title("player"));
+
+                f.render_widget(info_widget, left_split[1]);
 
                 let items: Vec<ListItem> = self.results.iter().enumerate().map(|(i, track)| {
                     let style = if i == self.selected {
@@ -234,22 +300,25 @@ impl App {
                                 let artist = track.artist.unwrap_or_else(|| "Unknown Artist".to_string());
                                 let title = track.title.clone();
                                 let artwork = track.artwork.clone();
-                                let duration_tx = self.duration_tx.clone();
+                                let update_tx = self.update_tx.clone();
 
                                 tokio::spawn(async move {
                                     if let Ok((url, duration)) = api.get_url(&artist, &title).await {
                                         let _ = player_tx.send(url).await;
-                                        let _  = duration_tx.send(duration).await;
+                                        
+                                        let art = if let Some(art_url) = artwork {
+                                            if let Ok(img_bytes) = api.artwork(&art_url).await {
+                                                let path = "/tmp/art.jpg";
+                                                let _ = std::fs::write(path, &img_bytes);
+                                                img_unicode(path, 24)
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
 
-                                    } else {
-                                        eprintln!("coudl not query url");
-                                    }
-
-                                    if let Some(art_url) = artwork {
-                                        if let Ok(img_bytes) = api.artwork(&art_url).await {
-                                            let path = "/tmp/art.jpg";
-                                            let _ = std::fs::write(path, &img_bytes);
-                                        }
+                                        let _ = update_tx.send(NowPlaying { duration, art }).await;
                                     }
                                 });
                             }
