@@ -32,22 +32,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust toolchains
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Build Dependencies
+      - name: Install system dependencies for build
         run: |
           if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
             sudo apt-get update
             sudo apt-get install -y build-essential
           elif [[ "${{ matrix.target }}" == "x86_64-apple-darwin" || "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
-            echo "Ensure macOS runner supports target."
+            echo "macOS runner includes most required tools."
           fi
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --package hifi-cli --release --target ${{ matrix.target }}
 
       - name: Verify Build Output
         run: ls -R target/${{ matrix.target }}/release/
@@ -55,7 +55,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/${{ matrix.artifact }}
-          cp target/${{ matrix.target }}/release/harp-rs dist/${{ matrix.artifact }}/
+          cp target/${{ matrix.target }}/release/hifi-cli dist/${{ matrix.artifact }}/
           cp README.md dist/${{ matrix.artifact }}/ 2>/dev/null || true
           cp LICENSE dist/${{ matrix.artifact }}/ 2>/dev/null || true
           tar -czf dist/${{ matrix.artifact }}.tar.gz -C dist ${{ matrix.artifact }}
