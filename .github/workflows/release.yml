@@ -37,8 +37,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Build Dependencies
+        run: |
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y build-essential
+          elif [[ "${{ matrix.target }}" == "x86_64-apple-darwin" || "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            echo "Ensure macOS runner supports target."
+          fi
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Verify Build Output
+        run: ls -R target/${{ matrix.target }}/release/
 
       - name: Package
         run: |
