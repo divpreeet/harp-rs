@@ -5,7 +5,7 @@
 
 ![rick is awesome](assets/rick.png)
 ## installation
-**currently, the harp is only compatible with macos and linux!**
+**currently, harp is only compatible with macos and linux!**
 
 make sure you have mpv installed - 
 
