@@ -35,7 +35,7 @@ chmod +x hifi-cli
 ```
 
 ## roadmap
-currently, the project is at a very simple wip, but there are a few features that i want to add, which would make it more like a music player! 
+currently, the project is at a very simple mvp, but there are a few features that i want to add, which would make it more like a music player! 
 
 features to add -
 - option to choose metadata provider
